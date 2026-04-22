@@ -26,7 +26,8 @@ ENTRY_POINTS = {
 
 REQUIRES = ['decorator', 'matplotlib>=2', 'numpy', 'scipy',
             'setuptools', 'obspy>=1.0.3',
-            'cartopy', 'geographiclib', 'shapely']
+            'cartopy', 'geographiclib', 'shapely',
+            'stackmaster']
 
 EXTRAS_REQUIRE = {
     'doc': ['sphinx', 'alabaster'],  # and decorator, obspy
