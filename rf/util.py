@@ -20,9 +20,36 @@ def _get_stations(inventory):
     stations = {ch[:-1] + '?': ch[-1] for ch in channels}
     return stations
 
+#copied from seisgo.utils, which is not a dependency of rf, to avoid circular imports.
+def segment_interpolate(sig1,nfric):
+    '''
+    this function interpolates the data to ensure all points located on interger times of the
+    sampling rate (e.g., starttime = 00:00:00.015, delta = 0.05.)
+    PARAMETERS:
+    ----------------------
+    sig1:  seismic recordings in a 1D array
+    nfric: the amount of time difference between the point and the adjacent assumed samples
+    RETURNS:
+    ----------------------
+    sig2:  interpolated seismic recordings on the sampling points
+    '''
+    npts = len(sig1)
+    sig2 = np.zeros(npts,dtype=np.float32)
+
+    #----instead of shifting, do a interpolation------
+    for ii in range(npts):
+
+        #----deal with edges-----
+        if ii==0 or ii==npts-1:
+            sig2[ii]=sig1[ii]
+        else:
+            #------interpolate using a hat function------
+            sig2[ii]=(1-nfric)*sig1[ii+1]+nfric*sig1[ii]
+
+    return sig2
 
 def iter_event_data(events, inventory, get_waveforms, phase='P',
-                    request_window=None, pad=10, pbar=None, **kwargs):
+                    request_window=None, pad=10, pbar=None, sps=None,**kwargs):
     """
     Return iterator yielding three component streams per station and event.
 
@@ -37,6 +64,7 @@ def iter_event_data(events, inventory, get_waveforms, phase='P',
     :param float pad: add specified time in seconds to request window and
        trim afterwards again
     :param pbar: tqdm_ instance for displaying a progressbar
+    :param sps: If not None, resample the data to the given sampling rate.
     :param kwargs: all other kwargs are passed to `~rf.rfstream.rfstats()`
 
     :return: three component streams with raw data
@@ -87,7 +115,12 @@ def iter_event_data(events, inventory, get_waveforms, phase='P',
         except Exception:  # no data available
             continue
         stream.trim(starttime, endtime)
-        stream.merge()
+        if len(stream.get_gaps())>0:
+            from warnings import warn
+            warn('Gaps detected for event %s, station %s. Merged stream with fill_value=0.'
+                 % (event.resource_id, seedid))
+            stream.merge(fill_value=0)
+        #
         if len(stream) != 3:
             from warnings import warn
             warn('Need 3 component seismograms. %d components '
@@ -100,7 +133,23 @@ def iter_event_data(events, inventory, get_waveforms, phase='P',
                  % (event.resource_id, seedid))
             continue
         for tr in stream:
+            # check that the sampling rates match
+            if sps is not None and tr.stats.sampling_rate != sps:
+                if np.sum(np.isnan(tr.data))>0:
+                    raise(Exception('NaN found in trace'))
+                else:
+                    tr.interpolate(sps,method='weighted_average_slopes')
+                    # when starttimes are between sampling points
+                    fric = tr.stats.starttime.microsecond%(tr.stats.delta*1E6)
+                    if fric>1E-4:
+                        tr.data = segment_interpolate(np.float32(tr.data),float(fric/(tr.stats.delta*1E6)))
+                        #--reset the time to remove the discrepancy---
+                        tr.stats.starttime-=(fric*1E-6)
+                    # update stats after interpolation
+                    tr.stats.sampling_rate = sps
+                    tr.stats.delta = 1.0/sps
             tr.stats.update(stats)
+            
         yield RFStream(stream)
 
 
