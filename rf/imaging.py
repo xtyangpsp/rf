@@ -289,7 +289,7 @@ def plot_profile_map(boxes, inventory=None, label_stations=True, ppoints=None,
 def plot_profile(profile, fname=None, figsize=None, dpi=None,
                  scale=1, fillcolors=('C3', 'C0'),
                  trim=None, top=None, moveout_model='iasp91',
-                 yinterval=None):
+                 yinterval=None, gain_power=0):
     """
     Plot receiver function profile.
 
@@ -309,6 +309,9 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
         `~.simple_model.SimpleModel` object to calculate depths for
         tick labels.
     :param yinterval: interval for y-axis ticks
+    :param gain_power: power for gain function. If 0, no gain is applied. If
+        > 0, gain is (t-t0)^gain_power, where t0 is the time of the first
+        sample in the profile. This can be used to enhance later arrivals.
     """
     if len(profile) == 0:
         return
@@ -322,8 +325,23 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
             max(tr.stats.box_pos for tr in profile) + pad)
     max_ = max(np.max(np.abs(tr.data)) for tr in profile)
     for tr in profile:
-        x = tr.stats.box_pos + scale * tr.data / max_ * min(widths)
         y = tr.times() - (tr.stats.onset - tr.stats.starttime)
+
+        # --- Time-Variant Gain ---
+        if gain_power > 0:
+            # We start gain at onset (y=0). Avoid gain for negative time (pre-event noise)        
+            # Create a gain vector: 1.0 at t=0, increasing with time
+            # clip(min=0) ensures we don't apply weird gains to pre-signal noise
+            t_gain = np.where(y > 0, np.power(y + 1, gain_power), 1.0)
+            
+            # Apply the gain to the data
+            gained_data = tr.data * t_gain
+        else:
+            gained_data = tr.data.copy()
+        
+        # Now use your GLOBAL max_ for plotting to preserve lateral variation
+        x = tr.stats.box_pos + scale * (gained_data / max_) * min(widths)
+
         ax.plot(x, y, 'k')
         c1, c2 = fillcolors
         if c1:
