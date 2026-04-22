@@ -7,7 +7,7 @@ import warnings
 
 import matplotlib.patheffects as PathEffects
 from matplotlib.ticker import (AutoMinorLocator, FixedLocator, FixedFormatter,
-                               MaxNLocator)
+                               MaxNLocator, MultipleLocator)
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -288,7 +288,8 @@ def plot_profile_map(boxes, inventory=None, label_stations=True, ppoints=None,
 
 def plot_profile(profile, fname=None, figsize=None, dpi=None,
                  scale=1, fillcolors=('C3', 'C0'),
-                 trim=None, top=None, moveout_model='iasp91'):
+                 trim=None, top=None, moveout_model='iasp91',
+                 yinterval=None):
     """
     Plot receiver function profile.
 
@@ -307,6 +308,7 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
     :param moveout_model: string with model filename. Will be loaded into a
         `~.simple_model.SimpleModel` object to calculate depths for
         tick labels.
+    :param yinterval: interval for y-axis ticks
     """
     if len(profile) == 0:
         return
@@ -333,6 +335,9 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
     ax.set_xlabel('distance (km)')
     ax.set_ylim(max(y), min(y))
     ax.set_ylabel('time (s)')
+    if yinterval:
+        t_int = yinterval[0] if isinstance(yinterval, (list, tuple)) else yinterval
+        ax.yaxis.set_major_locator(MultipleLocator(t_int))
     if moveout_model:
         from rf.simple_model import load_model
         model = load_model(moveout_model)
@@ -342,9 +347,11 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
         pd = np.abs(pd)  # pd has negative values for S phases/rfs
         ylim = ax.get_ylim()
         ax2 = ax.twinx()
-        ax.sharey(ax2)
+        # ax.sharey(ax2)
         dkm = 50
-        if profile[0].stats.endtime - profile[0].stats.onset > 50:
+        if isinstance(yinterval, (list, tuple)) and len(yinterval) > 1:
+            dkm = yinterval[1]
+        elif profile[0].stats.endtime - profile[0].stats.onset > 50:
             dkm = 200
         d1 = np.arange(20) * dkm
         d2 = np.arange(100) * dkm / 5
