@@ -5,7 +5,7 @@ Functions for receiver function profile calculation.
 """
 import numpy as np
 from rf.util import _add_processing_info, direct_geodetic
-
+from stackmaster.core import stack
 
 _LARGE_BOX_WIDTH = 2000
 
@@ -73,58 +73,94 @@ def _find_box(latlon, boxes, crs=None):
 
 
 @_add_processing_info
-def profile(stream, boxes, crs=None):
+def profile(stream, boxes, crs=None, stack_method='linear'):
     """
-    Stack traces in stream by piercing point coordinates in defined boxes.
+    Stack traces in stream by piercing point coordinates in defined boxes 
+    using the specified stackmaster method.
 
     :param stream: stream with pre-calculated piercing point coordinates
     :param boxes: boxes created with `get_profile_boxes()`
     :param crs: cartopy projection (default: AzimuthalEquidistant)
+    :param stack_method: method for stacking (e.g., 'linear', 'pws', 'robust', 'tfpws')
     :return: profile stream
     """
-    stack = {}
+    # Dictionary to store lists of traces instead of a running sum
+    traces_in_boxes = {}
+    
     for tr in stream:
         ppoint = (tr.stats.pp_latitude, tr.stats.pp_longitude)
         box = _find_box(ppoint, boxes, crs=crs)
         if box is None:
             continue
+            
         pos = box['pos']
         comp = tr.stats.channel[-1]
         key = (pos, comp)
-        if key not in stack:
-            header = {'box_pos': pos,
-                      'box_length': box['length'],
-                      'box_latitude': box['latlon'][0],
-                      'box_longitude': box['latlon'][1],
-                      'profile_latitude': boxes[0]['profile']['latlon'][0],
-                      'profile_longitude': boxes[0]['profile']['latlon'][1],
-                      'profile_azimuth': boxes[0]['profile']['azimuth'],
-                      'profile_length': boxes[0]['profile']['length'],
-                      'num': 1,
-                      'sampling_rate': tr.stats.sampling_rate,
-                      'channel': '??' + comp}
+        
+        if key not in traces_in_boxes:
+            # We store the box metadata and a list for the data
+            traces_in_boxes[key] = {
+                'metadata': {
+                    'box_pos': pos,
+                    'box_length': box['length'],
+                    'box_latitude': box['latlon'][0],
+                    'box_longitude': box['latlon'][1],
+                    'profile_latitude': boxes[0]['profile']['latlon'][0],
+                    'profile_longitude': boxes[0]['profile']['latlon'][1],
+                    'profile_azimuth': boxes[0]['profile']['azimuth'],
+                    'profile_length': boxes[0]['profile']['length'],
+                    'sampling_rate': tr.stats.sampling_rate,
+                    'channel': '??' + comp,
+                    'onset_offset': tr.stats.onset - tr.stats.starttime if 'onset' in tr.stats else None
+                },
+                'data_list': []
+            }
+            # Copy specific geophysical headers from the first trace
             for entry in ('slowness', 'phase', 'moveout', 'processing'):
                 if entry in tr.stats:
-                    header[entry] = tr.stats[entry]
-            stack[key] = tr2 = tr.__class__(data=tr.data, header=header)
-            if 'onset' in tr.stats:
-                onset = tr.stats.onset - tr.stats.starttime
-                tr2.stats.onset = tr2.stats.starttime + onset
-        else:
-            tr2 = stack[key]
-            tr2.data = tr2.data + tr.data
-            tr2.stats.num += 1
-    for tr2 in stack.values():
-        tr2.data = tr2.data / tr2.stats.num
-    if hasattr(stream, 'iterable'):  # support tqdm objects
+                    traces_in_boxes[key]['metadata'][entry] = tr.stats[entry]
+        
+        traces_in_boxes[key]['data_list'].append(tr.data)
+
+    # Perform the stacking using stackmaster
+    profile_traces = []
+    for key, box_info in traces_in_boxes.items():
+        data_2d = np.array(box_info['data_list'])
+        num_traces = data_2d.shape[0]
+        
+        if num_traces == 0:
+            continue
+            
+        # Call stackmaster.core.stack
+        # Note: stackmaster expects a 2D array (N_traces, N_samples)
+        stacked_data = stack(data_2d, method=stack_method)
+        
+        # Reconstruct the Trace/RFTrace object
+        header = box_info['metadata'].copy()
+        onset_offset = header.pop('onset_offset')
+        header['num'] = num_traces
+        
+        # Assuming the stream class is compatible with the input stream (e.g., RFTrace)
+        from rf.rfstream import RFTrace
+        tr_stacked = RFTrace(data=stacked_data, header=header)
+        
+        if onset_offset is not None:
+            tr_stacked.stats.onset = tr_stacked.stats.starttime + onset_offset
+            
+        profile_traces.append(tr_stacked)
+
+    # Reconstruct the Stream/RFStream
+    if hasattr(stream, 'iterable'):
         cls = stream.iterable.__class__
     else:
         cls = stream.__class__
+        
     try:
-        profile = cls(traces=stack.values())
-    except TypeError:  # stream can be an iterator
+        profile = cls(traces=profile_traces)
+    except TypeError:
         from rf import RFStream
-        profile = RFStream(traces=stack.values())
+        profile = RFStream(traces=profile_traces)
+        
     profile.sort(['channel', 'box_pos'])
     profile.type = 'profile'
     return profile
