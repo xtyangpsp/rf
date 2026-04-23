@@ -6,13 +6,15 @@ Functions for receiver function profile calculation.
 import numpy as np
 from rf.util import _add_processing_info, direct_geodetic
 from stackmaster.core import stack
+from rf.rfstream import RFTrace
+from rf.rfstream import RFStream
+import cartopy.crs as ccrs
+from shapely.geometry import Point, Polygon
 
 _LARGE_BOX_WIDTH = 2000
 
-
 def _get_box(latlon0, azimuth, length, width=_LARGE_BOX_WIDTH, offset=0):
     """Create a single box."""
-    from shapely.geometry import Polygon
     start = direct_geodetic(latlon0, azimuth, offset)
     azis = ((azimuth - 90) % 360, azimuth,
             (azimuth + 90) % 360, (azimuth + 180) % 360)
@@ -58,8 +60,6 @@ def get_profile_boxes(latlon0, azimuth, bins, width=_LARGE_BOX_WIDTH):
 
 def _find_box(latlon, boxes, crs=None):
     """Return the box which encloses the coordinates."""
-    import cartopy.crs as ccrs
-    from shapely.geometry import Point
     if crs is None:
         latlons = [boxes[len(boxes)//2]['latlon']]
         latlon0 = np.median(latlons, axis=0)
@@ -141,7 +141,6 @@ def profile(stream, boxes, crs=None, stack_method='linear'):
         header['num'] = num_traces
         
         # Assuming the stream class is compatible with the input stream (e.g., RFTrace)
-        from rf.rfstream import RFTrace
         tr_stacked = RFTrace(data=stacked_data, header=header)
         
         if onset_offset is not None:
@@ -158,7 +157,6 @@ def profile(stream, boxes, crs=None, stack_method='linear'):
     try:
         profile = cls(traces=profile_traces)
     except TypeError:
-        from rf import RFStream
         profile = RFStream(traces=profile_traces)
         
     profile.sort(['channel', 'box_pos'])
