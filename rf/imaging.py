@@ -11,6 +11,110 @@ from matplotlib.ticker import (AutoMinorLocator, FixedLocator, FixedFormatter,
 import matplotlib.pyplot as plt
 import numpy as np
 
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from obspy import Catalog
+
+def plot_earthquake_catalog(catalog: Catalog, lonlat: list[float], 
+                             figsize=(10, 6), title="Earthquake Catalog"):
+    """
+    Plot an ObsPy earthquake catalog on a global map using Cartopy.
+
+    Parameters
+    ----------
+    catalog : obspy.Catalog
+        ObsPy earthquake catalog to plot.
+    lonlat : list or array-like of two floats
+        [center_longitude, center_latitude] for the map projection center.
+    figsize : tuple
+        Figure size (width, height) in inches.
+    title : str
+        Title for the plot.
+    """
+    center_lon, center_lat = lonlat[0], lonlat[1]
+
+    # --- Extract event data ---
+    lons, lats, depths, magnitudes = [], [], [], []
+    for event in catalog:
+        try:
+            origin = event.preferred_origin() or event.origins[0]
+            mag    = event.preferred_magnitude() or event.magnitudes[0]
+            lons.append(origin.longitude)
+            lats.append(origin.latitude)
+            depths.append(origin.depth / 1000.0 if origin.depth else 0)  # m → km
+            magnitudes.append(mag.mag if mag else 1.0)
+        except (IndexError, AttributeError):
+            continue
+
+    lons       = np.array(lons)
+    lats       = np.array(lats)
+    depths     = np.array(depths)
+    magnitudes = np.array(magnitudes)
+
+    # --- Projection: Orthographic centered on lonlat ---
+    projection = ccrs.Orthographic(central_longitude=center_lon,
+                                   central_latitude=center_lat)
+    transform  = ccrs.PlateCarree()
+
+    fig, ax = plt.subplots(figsize=figsize,
+                           subplot_kw={"projection": projection})
+    ax.set_global()
+
+    # --- Base map features ---
+    ax.add_feature(cfeature.LAND,        facecolor="lightgray",  zorder=0)
+    ax.add_feature(cfeature.OCEAN,       facecolor="lightblue",  zorder=0)
+    ax.add_feature(cfeature.COASTLINE,   linewidth=0.5,          zorder=1)
+    ax.add_feature(cfeature.BORDERS,     linewidth=0.3,          linestyle=":",  zorder=1)
+    ax.add_feature(cfeature.LAKES,       facecolor="lightblue",  zorder=1)
+    ax.gridlines(draw_labels=False, linewidth=0.4,
+                 color="gray", alpha=0.5, linestyle="--")
+
+    # --- Mark projection center ---
+    ax.plot(center_lon, center_lat, marker="*", color="gold",
+            markersize=14, markeredgecolor="black", markeredgewidth=0.8,
+            transform=transform, zorder=5, label="Map center")
+
+    # --- Scatter: size ∝ magnitude², color = depth ---
+    sizes  = (2 ** magnitudes) * 3          # exponential scaling feels natural
+    scatter = ax.scatter(lons, lats,
+                         c=depths, cmap="hot_r",
+                         s=sizes, alpha=0.7,
+                         linewidths=0.3, edgecolors="black",
+                         transform=transform,
+                         vmin=0, vmax=max(depths) if depths.size else 700,
+                         zorder=4)
+
+    # --- Colourbar: depth ---
+    cbar = plt.colorbar(scatter, ax=ax, orientation="vertical",
+                        shrink=0.55, pad=0.04)
+    cbar.set_label("Depth (km)", fontsize=11)
+
+    # --- Magnitude legend ---
+    legend_mags  = [3, 5, 7]
+    legend_sizes = [(2 ** m) * 3 for m in legend_mags]
+    legend_handles = [
+        plt.scatter([], [], s=sz, color="salmon",
+                    edgecolors="black", linewidths=0.5,
+                    label=f"M {m}")
+        for sz, m in zip(legend_sizes, legend_mags)
+    ]
+    ax.legend(handles=legend_handles, title="Magnitude",
+              loc="lower left", fontsize=9, title_fontsize=9,
+              framealpha=0.8)
+
+    # --- Stats annotation ---
+    stats_text = (f"Events : {len(lons)}\n"
+                  f"Mag range: {magnitudes.min():.1f}–{magnitudes.max():.1f}\n"
+                  f"Depth range: {depths.min():.0f}–{depths.max():.0f} km")
+    ax.text(0.02, 0.97, stats_text, transform=ax.transAxes,
+            fontsize=8, verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.7))
+
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
+# --- End of earthquake catalog plotting function ---
 
 def _label(stream):
     label_fmts = ['{network}.{station}.{location}.{channel}',
@@ -259,7 +363,7 @@ def plot_ppoints(ppoints, inventory=None, label_stations=True, ax=None,
 
 
 def plot_profile_map(boxes, inventory=None, label_stations=True, ppoints=None,
-                     ax=None, crs=None, **kwargs):
+                     ax=None, crs=None, title=None, **kwargs):
     """
     Plot profile map with stations and piercing points.
 
@@ -270,6 +374,7 @@ def plot_profile_map(boxes, inventory=None, label_stations=True, ppoints=None,
     :param ax: geoaxes (default None: new ax will be created)
     :param crs: coordinate reference system for new geoaxis, (default: None,
         then AzimuthalEquidistant projection with appropriate center is used.)
+    :param title: title for the plot.
     :param \*\*kwargs: other kwargs are passed to ax.add_geometries() call
     """
     if ax is None:
@@ -283,13 +388,16 @@ def plot_profile_map(boxes, inventory=None, label_stations=True, ppoints=None,
     kw.update(kwargs)
     for box in boxes:
         ax.add_geometries([box['poly']], crs=__pc(), **kw)
+    #
+    if title is not None:
+        ax.set_title(title)
     return ax
 
 
 def plot_profile(profile, fname=None, figsize=None, dpi=None,
                  scale=1, fillcolors=('C3', 'C0'),
                  trim=None, top=None, moveout_model='iasp91',
-                 yinterval=None, gain_power=0):
+                 yinterval=None, gain_power=0, title=None):
     """
     Plot receiver function profile.
 
@@ -312,6 +420,7 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
     :param gain_power: power for gain function. If 0, no gain is applied. If
         > 0, gain is (t-t0)^gain_power, where t0 is the time of the first
         sample in the profile. This can be used to enhance later arrivals.
+    :param title: title for the plot
     """
     if len(profile) == 0:
         return
@@ -399,6 +508,11 @@ def plot_profile(profile, fname=None, figsize=None, dpi=None,
     elif top is not None:
         raise NotImplementedError("'%s' not supported for top parameter" % top)
     ax.set_xlim(*xlim)
+    if title is not None:
+        if top == 'hist':
+            ax3.set_title(title)
+        else:
+            ax.set_title(title)
     if fname:
         fig.savefig(fname, dpi=dpi)
         plt.close(fig)
